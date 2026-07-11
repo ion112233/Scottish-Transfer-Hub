@@ -49,21 +49,23 @@ def get_transfers_between(start_date: str, end_date: str, per_page: int = 50) ->
 
 def get_scottish_team_ids() -> set[int]:
     """
-    Returns the ids of every team currently playing in one of the
-    configured Scottish leagues, by looking up each league's current
-    season and then that season's teams. Independent of the transfers
-    endpoint, so it isn't subject to its nested-include limit.
+    Returns the ids of every team playing in one of the configured
+    Scottish leagues, by looking up each league's most recent season
+    (SportMonks' currentSeason relation can be empty in the off-season)
+    and then that season's teams. Independent of the transfers endpoint,
+    so it isn't subject to its nested-include limit.
     """
     team_ids = set()
     for league_id in config.SCOTTISH_LEAGUE_IDS:
-        league = _get(f"/leagues/{league_id}", {"include": "currentSeason"})
-        season = (league.get("data") or {}).get("currentSeason")
-        if not season:
-            print(f"League {league_id}: no currentSeason returned by SportMonks.")
+        league = _get(f"/leagues/{league_id}", {"include": "seasons"})
+        seasons = (league.get("data") or {}).get("seasons") or []
+        if not seasons:
+            print(f"League {league_id}: no seasons returned by SportMonks.")
             continue
+        season = max(seasons, key=lambda s: s.get("starting_at") or "")
         teams = _get(f"/teams/seasons/{season['id']}")
         found = [team["id"] for team in teams.get("data", [])]
-        print(f"League {league_id}: currentSeason={season['id']}, {len(found)} teams.")
+        print(f"League {league_id}: using season {season['id']} ({season.get('name')}), {len(found)} teams.")
         team_ids.update(found)
     return team_ids
 
