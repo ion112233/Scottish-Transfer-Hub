@@ -77,7 +77,10 @@ def main() -> int:
     end_date = datetime.date.today()
     start_date = end_date - datetime.timedelta(days=TRANSFER_WINDOW_DAYS)
     transfers = sportmonks_client.get_transfers_between(start_date.isoformat(), end_date.isoformat())
+    print(f"Fetched {len(transfers)} transfers from {start_date} to {end_date}.")
+
     transfers = sportmonks_client.filter_scottish(transfers)
+    print(f"{len(transfers)} of those are in configured Scottish leagues {config.SCOTTISH_LEAGUE_IDS}.")
 
     if last_seen is not None:
         transfers = [t for t in transfers if t["id"] > last_seen]
