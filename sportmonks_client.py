@@ -47,6 +47,19 @@ def get_transfers_between(start_date: str, end_date: str, per_page: int = 50) ->
     return transfers
 
 
+def get_team(team_id: int | None) -> dict:
+    """
+    Fetches a single team by id (name, image_path, ...). Returns {} if the
+    id is missing or the plan doesn't cover the team.
+    """
+    if not team_id:
+        return {}
+    try:
+        return _get(f"/teams/{team_id}").get("data") or {}
+    except requests.exceptions.HTTPError:
+        return {}
+
+
 def get_scottish_team_ids() -> set[int]:
     """
     Returns the ids of every team playing in one of the configured
@@ -58,15 +71,18 @@ def get_scottish_team_ids() -> set[int]:
     team_ids = set()
     for league_id in config.SCOTTISH_LEAGUE_IDS:
         league = _get(f"/leagues/{league_id}", {"include": "seasons"})
-        seasons = (league.get("data") or {}).get("seasons") or []
+        league_data = league.get("data") or {}
+        seasons = league_data.get("seasons") or []
         if not seasons:
-            print(f"League {league_id}: no seasons returned by SportMonks.")
+            print(f"League {league_id}: no seasons returned (league name: {league_data.get('name')!r}).")
             continue
         season = max(seasons, key=lambda s: s.get("starting_at") or "")
         teams = _get(f"/teams/seasons/{season['id']}")
-        found = [team["id"] for team in teams.get("data", [])]
-        print(f"League {league_id}: using season {season['id']} ({season.get('name')}), {len(found)} teams.")
-        team_ids.update(found)
+        found = [(team["id"], team.get("name")) for team in teams.get("data", [])]
+        print(f"League {league_id}: using season {season['id']} ({season.get('name')}), {len(found)} teams:")
+        for team_id, name in found:
+            print(f"  {team_id}: {name}")
+        team_ids.update(team_id for team_id, _ in found)
     return team_ids
 
 
@@ -83,8 +99,10 @@ def filter_scottish(transfers: list[dict], scottish_team_ids: set[int]) -> list[
 
     relevant = []
     for t in transfers:
-        from_id = (t.get("fromTeam") or {}).get("id")
-        to_id = (t.get("toTeam") or {}).get("id")
+        # Prefer the raw ids on the transfer itself - the fromTeam/toTeam
+        # includes can come back null on plans that don't cover the team.
+        from_id = t.get("from_team_id") or (t.get("fromTeam") or {}).get("id")
+        to_id = t.get("to_team_id") or (t.get("toTeam") or {}).get("id")
         if from_id in scottish_team_ids or to_id in scottish_team_ids:
             relevant.append(t)
     return relevant

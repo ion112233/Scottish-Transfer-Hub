@@ -21,6 +21,15 @@ SCOTTISH_LEAGUE_IDS = [
     if x.strip()
 ]
 
+# Optional: hardcoded Scottish team ids. When non-empty, these are used
+# directly and the league -> season -> teams lookup is skipped entirely.
+# Fill in from a run's "League 501: ... teams:" log lines, or set the
+# SCOTTISH_TEAM_IDS env var/secret to a comma-separated list.
+SCOTTISH_TEAM_IDS = [
+    int(x) for x in os.environ.get("SCOTTISH_TEAM_IDS", "").split(",")
+    if x.strip()
+]
+
 # --- YouTube ---
 YOUTUBE_CLIENT_ID = os.environ["YOUTUBE_CLIENT_ID"]
 YOUTUBE_CLIENT_SECRET = os.environ["YOUTUBE_CLIENT_SECRET"]

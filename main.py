@@ -44,10 +44,12 @@ def build_description(player: str, from_club: str, to_club: str, fee_text: str) 
 
 def process_transfer(transfer: dict) -> None:
     player = (transfer.get("player") or {}).get("display_name") or (transfer.get("player") or {}).get("name") or "Unknown Player"
-    from_team = transfer.get("fromTeam") or {}
-    to_team = transfer.get("toTeam") or {}
-    from_club = from_team.get("name", "Unknown Club")
-    to_club = to_team.get("name", "Unknown Club")
+    # The fromTeam/toTeam includes can come back null; fall back to
+    # fetching the team by its raw id from the transfer record.
+    from_team = transfer.get("fromTeam") or sportmonks_client.get_team(transfer.get("from_team_id"))
+    to_team = transfer.get("toTeam") or sportmonks_client.get_team(transfer.get("to_team_id"))
+    from_club = from_team.get("name") or "Unknown Club"
+    to_club = to_team.get("name") or "Unknown Club"
     from_logo = from_team.get("image_path")
     to_logo = to_team.get("image_path")
     fee_text = format_fee(transfer)
@@ -79,8 +81,12 @@ def main() -> int:
     transfers = sportmonks_client.get_transfers_between(start_date.isoformat(), end_date.isoformat())
     print(f"Fetched {len(transfers)} transfers from {start_date} to {end_date}.")
 
-    scottish_team_ids = sportmonks_client.get_scottish_team_ids()
-    print(f"{len(scottish_team_ids)} teams currently in configured Scottish leagues {config.SCOTTISH_LEAGUE_IDS}.")
+    if config.SCOTTISH_TEAM_IDS:
+        scottish_team_ids = set(config.SCOTTISH_TEAM_IDS)
+        print(f"Using {len(scottish_team_ids)} hardcoded Scottish team ids.")
+    else:
+        scottish_team_ids = sportmonks_client.get_scottish_team_ids()
+        print(f"{len(scottish_team_ids)} teams currently in configured Scottish leagues {config.SCOTTISH_LEAGUE_IDS}.")
 
     transfers = sportmonks_client.filter_scottish(transfers, scottish_team_ids)
     print(f"{len(transfers)} of those transfers involve a Scottish team.")
