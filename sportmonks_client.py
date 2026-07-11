@@ -21,11 +21,24 @@ def _get(path: str, params: dict | None = None) -> dict:
     return resp.json()
 
 
-def _fetch_transfers_page(start_date: str, end_date: str, include: str, per_page: int) -> list[dict]:
+def get_transfers_between(start_date: str, end_date: str, per_page: int = 50) -> list[dict]:
+    """
+    Returns all transfers between start_date and end_date (YYYY-MM-DD,
+    inclusive), enriched with player + team names/images. SportMonks caps
+    this endpoint at a 31-day range and 50 results per page, so this
+    paginates until every page has been fetched. Only flat (non-nested)
+    includes are used here - this endpoint allows at most 1 nested
+    include per request, which isn't enough to also pull each team's
+    league (see get_scottish_team_ids for how that's resolved instead).
+    """
     transfers = []
     page = 1
     while True:
-        params = {"include": include, "per_page": per_page, "page": page}
+        params = {
+            "include": "player;fromTeam;toTeam;type",
+            "per_page": per_page,
+            "page": page,
+        }
         data = _get(f"/transfers/between/{start_date}/{end_date}", params)
         transfers.extend(data.get("data", []))
         if not data.get("pagination", {}).get("has_more"):
@@ -34,50 +47,37 @@ def _fetch_transfers_page(start_date: str, end_date: str, include: str, per_page
     return transfers
 
 
-def get_transfers_between(start_date: str, end_date: str, per_page: int = 50) -> list[dict]:
+def get_scottish_team_ids() -> set[int]:
     """
-    Returns all transfers between start_date and end_date (YYYY-MM-DD,
-    inclusive), enriched with player + team names/images/leagues.
-    SportMonks caps this endpoint at a 31-day range, 50 results per page,
-    and 1 nested include per request - so fromTeam's and toTeam's active
-    seasons (needed to know each team's league) can't be requested
-    together. This fetches the range twice, once per side, and merges
-    the results by transfer id.
+    Returns the ids of every team currently playing in one of the
+    configured Scottish leagues, by looking up each league's current
+    season and then that season's teams. Independent of the transfers
+    endpoint, so it isn't subject to its nested-include limit.
     """
-    from_pass = _fetch_transfers_page(
-        start_date, end_date, "player;fromTeam.activeSeasons;toTeam;type", per_page
-    )
-    to_pass = _fetch_transfers_page(
-        start_date, end_date, "player;fromTeam;toTeam.activeSeasons;type", per_page
-    )
-    to_pass_by_id = {t["id"]: t for t in to_pass}
-    for t in from_pass:
-        other = to_pass_by_id.get(t["id"])
-        if other:
-            t["toTeam"] = other.get("toTeam", t.get("toTeam"))
-    return from_pass
+    team_ids = set()
+    for league_id in config.SCOTTISH_LEAGUE_IDS:
+        league = _get(f"/leagues/{league_id}", {"include": "currentSeason"})
+        season = (league.get("data") or {}).get("currentSeason")
+        if not season:
+            continue
+        teams = _get(f"/teams/seasons/{season['id']}")
+        for team in teams.get("data", []):
+            team_ids.add(team["id"])
+    return team_ids
 
 
-def filter_scottish(transfers: list[dict]) -> list[dict]:
+def filter_scottish(transfers: list[dict], scottish_team_ids: set[int]) -> list[dict]:
     """
-    Keep only transfers involving a team that plays in one of the
-    configured Scottish league IDs. SportMonks doesn't put a league_id
-    directly on a team - it only shows up on that team's active seasons
-    (hence the fromTeam.activeSeasons / toTeam.activeSeasons includes).
+    Keep only transfers involving a team currently in one of the
+    configured Scottish leagues.
     """
-    if not config.SCOTTISH_LEAGUE_IDS:
+    if not scottish_team_ids:
         return transfers
 
     relevant = []
     for t in transfers:
-        from_team = t.get("fromTeam") or {}
-        to_team = t.get("toTeam") or {}
-        league_ids = set()
-        for team in (from_team, to_team):
-            for season in team.get("activeSeasons") or []:
-                lid = season.get("league_id")
-                if lid:
-                    league_ids.add(lid)
-        if league_ids & set(config.SCOTTISH_LEAGUE_IDS):
+        from_id = (t.get("fromTeam") or {}).get("id")
+        to_id = (t.get("toTeam") or {}).get("id")
+        if from_id in scottish_team_ids or to_id in scottish_team_ids:
             relevant.append(t)
     return relevant
