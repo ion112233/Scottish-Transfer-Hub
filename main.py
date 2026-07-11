@@ -105,8 +105,11 @@ def main() -> int:
             continue
         max_id = max(max_id, transfer["id"])
 
-    state.save_last_seen_id(max_id)
-    print(f"Updated state to last_seen_id={max_id}")
+    if config.DRY_RUN:
+        print(f"[DRY RUN] Not updating state (would set last_seen_id={max_id}).")
+    else:
+        state.save_last_seen_id(max_id)
+        print(f"Updated state to last_seen_id={max_id}")
     return 0
 
 

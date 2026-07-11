@@ -9,6 +9,12 @@ import os
 import textwrap
 import requests
 from PIL import Image, ImageDraw, ImageFont
+
+# moviepy 1.0.3's resize effect still calls Image.ANTIALIAS, which Pillow
+# removed in v10. Restore it as an alias before moviepy needs it.
+if not hasattr(Image, "ANTIALIAS"):
+    Image.ANTIALIAS = Image.LANCZOS
+
 from gtts import gTTS
 from moviepy.editor import ImageClip, AudioFileClip, CompositeVideoClip, vfx
 

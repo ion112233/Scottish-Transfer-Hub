@@ -59,19 +59,24 @@ def get_scottish_team_ids() -> set[int]:
         league = _get(f"/leagues/{league_id}", {"include": "currentSeason"})
         season = (league.get("data") or {}).get("currentSeason")
         if not season:
+            print(f"League {league_id}: no currentSeason returned by SportMonks.")
             continue
         teams = _get(f"/teams/seasons/{season['id']}")
-        for team in teams.get("data", []):
-            team_ids.add(team["id"])
+        found = [team["id"] for team in teams.get("data", [])]
+        print(f"League {league_id}: currentSeason={season['id']}, {len(found)} teams.")
+        team_ids.update(found)
     return team_ids
 
 
 def filter_scottish(transfers: list[dict], scottish_team_ids: set[int]) -> list[dict]:
     """
     Keep only transfers involving a team currently in one of the
-    configured Scottish leagues.
+    configured Scottish leagues. If no leagues are configured at all,
+    filtering is treated as disabled and every transfer passes through -
+    but an empty scottish_team_ids with leagues configured (e.g. a failed
+    lookup) correctly matches nothing rather than everything.
     """
-    if not scottish_team_ids:
+    if not config.SCOTTISH_LEAGUE_IDS:
         return transfers
 
     relevant = []
