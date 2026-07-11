@@ -67,8 +67,7 @@ def process_transfer(transfer: dict) -> None:
             tags=["football", "soccer", "transfers", "scottish football", "shorts"],
         )
         print(f"Uploaded: https://youtube.com/shorts/{video_id}")
-
-    os.remove(out_path)
+        os.remove(out_path)
 
 
 def main() -> int:
