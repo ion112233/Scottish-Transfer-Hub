@@ -1,13 +1,14 @@
 """
 Entry point. Run hourly by GitHub Actions:
 
-  1. Fetch new transfers from SportMonks since the last run.
-  2. Filter to Scottish leagues.
+  1. Fetch transfers from SportMonks over the trailing TRANSFER_WINDOW_DAYS.
+  2. Filter to Scottish leagues, then to ids newer than the last one posted.
   3. For each (oldest first, capped at MAX_TRANSFERS_PER_RUN):
        - build a short vertical video
        - upload it to YouTube as a Short
   4. Update state.json with the newest transfer id we've now posted.
 """
+import datetime
 import os
 import sys
 import config
@@ -15,6 +16,8 @@ import state
 import sportmonks_client
 import video_gen
 import youtube_upload
+
+TRANSFER_WINDOW_DAYS = 7
 
 
 def format_fee(transfer: dict) -> str:
@@ -72,8 +75,13 @@ def main() -> int:
     last_seen = state.load_last_seen_id()
     print(f"Last seen transfer id: {last_seen}")
 
-    transfers = sportmonks_client.get_latest_transfers(id_after=last_seen)
+    end_date = datetime.date.today()
+    start_date = end_date - datetime.timedelta(days=TRANSFER_WINDOW_DAYS)
+    transfers = sportmonks_client.get_transfers_between(start_date.isoformat(), end_date.isoformat())
     transfers = sportmonks_client.filter_scottish(transfers)
+
+    if last_seen is not None:
+        transfers = [t for t in transfers if t["id"] > last_seen]
 
     if not transfers:
         print("No new transfers.")

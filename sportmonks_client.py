@@ -18,23 +18,27 @@ def _get(path: str, params: dict | None = None) -> dict:
     return resp.json()
 
 
-def get_latest_transfers(id_after: int | None = None, per_page: int = 50) -> list[dict]:
+def get_transfers_between(start_date: str, end_date: str, per_page: int = 50) -> list[dict]:
     """
-    Returns recent transfers, enriched with player + team names/images.
-    If id_after is given, only transfers with a higher id are returned
-    (SportMonks' idAfter static filter is designed for exactly this kind
-    of incremental polling).
+    Returns all transfers between start_date and end_date (YYYY-MM-DD,
+    inclusive), enriched with player + team names/images. SportMonks caps
+    this endpoint at a 31-day range and 50 results per page, so this
+    paginates until every page has been fetched.
     """
-    params = {
-        "include": "player;fromTeam;toTeam;type",
-        "per_page": per_page,
-        "order": "desc",
-    }
-    if id_after is not None:
-        params["filters"] = f"idAfter:{id_after}"
-
-    data = _get("/transfers", params)
-    return data.get("data", [])
+    transfers = []
+    page = 1
+    while True:
+        params = {
+            "include": "player;fromTeam;toTeam;type",
+            "per_page": per_page,
+            "page": page,
+        }
+        data = _get(f"/transfers/between/{start_date}/{end_date}", params)
+        transfers.extend(data.get("data", []))
+        if not data.get("pagination", {}).get("has_more"):
+            break
+        page += 1
+    return transfers
 
 
 def filter_scottish(transfers: list[dict]) -> list[dict]:
