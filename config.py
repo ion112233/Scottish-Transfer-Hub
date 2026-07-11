@@ -16,7 +16,7 @@ SPORTMONKS_BASE_URL = "https://api.sportmonks.com/v3/football"
 SCOTTISH_LEAGUE_IDS = [
     int(x) for x in os.environ.get(
         "SCOTTISH_LEAGUE_IDS",
-        "501,502,503,504",  # Premiership, Championship, League One, League Two (verify/adjust)
+        "501,502",  # Premiership, Championship, League One, League Two (verify/adjust)
     ).split(",")
     if x.strip()
 ]
