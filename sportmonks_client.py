@@ -29,7 +29,7 @@ def get_transfers_between(start_date: str, end_date: str, per_page: int = 50) ->
     page = 1
     while True:
         params = {
-            "include": "player;fromTeam;toTeam;type",
+            "include": "player;fromTeam.activeSeasons;toTeam.activeSeasons;type",
             "per_page": per_page,
             "page": page,
         }
@@ -44,8 +44,9 @@ def get_transfers_between(start_date: str, end_date: str, per_page: int = 50) ->
 def filter_scottish(transfers: list[dict]) -> list[dict]:
     """
     Keep only transfers involving a team that plays in one of the
-    configured Scottish league IDs. SportMonks doesn't tag a transfer
-    with a league directly, so we check the participating teams.
+    configured Scottish league IDs. SportMonks doesn't put a league_id
+    directly on a team - it only shows up on that team's active seasons
+    (hence the fromTeam.activeSeasons / toTeam.activeSeasons includes).
     """
     if not config.SCOTTISH_LEAGUE_IDS:
         return transfers
@@ -56,9 +57,10 @@ def filter_scottish(transfers: list[dict]) -> list[dict]:
         to_team = t.get("toTeam") or {}
         league_ids = set()
         for team in (from_team, to_team):
-            lid = team.get("league_id") or team.get("current_league_id")
-            if lid:
-                league_ids.add(lid)
+            for season in team.get("activeSeasons") or []:
+                lid = season.get("league_id")
+                if lid:
+                    league_ids.add(lid)
         if league_ids & set(config.SCOTTISH_LEAGUE_IDS):
             relevant.append(t)
     return relevant
