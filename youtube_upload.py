@@ -3,10 +3,8 @@ Uploads a finished video to YouTube as a Short using a stored OAuth
 refresh token (see get_youtube_token.py for how to generate one).
 """
 from google.oauth2.credentials import Credentials
-from google_auth_httplib2 import AuthorizedHttp
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-import httplib2
 
 import config
 

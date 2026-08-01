@@ -1,122 +1,175 @@
 """
-Entry point. Run hourly by GitHub Actions:
+Entry point. Run every 8 hours by GitHub Actions:
 
-  1. Fetch transfers from SportMonks over the trailing TRANSFER_WINDOW_DAYS.
-  2. Filter to Scottish leagues, then to ids newer than the last one posted.
-  3. For each (oldest first, capped at MAX_TRANSFERS_PER_RUN):
+  1. Scrape Transfermarkt's Scottish Premiership season transfer page
+     (retried a few times on transient failure).
+  2. Drop anything already posted (tracked in state.json) and anything
+     that's just a loan expiring (not real transfer news).
+  3. Score what's left (fee + market value + club prominence) and take the
+     2 most interesting overall, not just the 2 most recent.
+  4. For each (most interesting first, retried a few times on failure):
        - build a short vertical video
        - upload it to YouTube as a Short
-  4. Update state.json with the newest transfer id we've now posted.
+  5. Update state.json with every transfer id just posted.
+
+Any step that still fails after retries triggers an email alert (see
+notify.py) rather than failing silently - the goal is to catch problems
+(a broken scrape, a dead YouTube token, a quota outage) as they happen,
+since nothing else is watching this run unattended.
 """
-import datetime
 import os
 import sys
+
 import config
+import notify
+import ranking
+import retry
+import scraper
 import state
-import sportmonks_client
 import video_gen
 import youtube_upload
 
-TRANSFER_WINDOW_DAYS = 7
-
 
 def format_fee(transfer: dict) -> str:
-    amount = transfer.get("amount")
-    if not amount:
-        return "Fee undisclosed"
-    # SportMonks amounts are typically in the base currency unit (varies by
-    # endpoint/plan) - adjust formatting here once you confirm the currency
-    # your plan returns.
-    return f"€{amount:,.0f}"
+    if transfer["fee_type"] == "free":
+        return "Free transfer"
+    if transfer["fee_type"] in ("loan", "loan_fee"):
+        return transfer["fee_text"]
+    if transfer["fee_type"] == "fee" and transfer["fee_eur"]:
+        return f"€{transfer['fee_eur']:,.0f}"
+    return "Fee undisclosed"
 
 
 def build_title(player: str, from_club: str, to_club: str) -> str:
     return f"{player}: {from_club} ➡ {to_club} | Scottish Football #Shorts"
 
 
-def build_description(player: str, from_club: str, to_club: str, fee_text: str) -> str:
-    return (
+def club_hashtags(transfer: dict) -> list[str]:
+    tags = [config.CLUB_HASHTAGS[cid] for cid in (transfer["from_club_id"], transfer["to_club_id"])
+            if cid in config.CLUB_HASHTAGS]
+    return list(dict.fromkeys(tags))  # dedupe (same-club loan-style entries), keep order
+
+
+def build_description(transfer: dict, player: str, from_club: str, to_club: str, fee_text: str,
+                       photo_credit: dict | None) -> str:
+    description = (
         f"{player} moves from {from_club} to {to_club}. {fee_text}.\n\n"
-        f"Automated transfer update powered by SportMonks data.\n"
-        f"#ScottishFootball #Transfers #Shorts"
+        f"Automated transfer update, sourced from Transfermarkt.\n"
     )
+    if photo_credit:
+        description += (
+            f"Player photo: {photo_credit['artist']}, {photo_credit['license']}, "
+            f"via Wikimedia Commons ({photo_credit['url']}).\n"
+        )
+    description += f"{config.MUSIC_CREDIT}\n"
+    hashtags = ["#ScottishFootball", "#Transfers", "#Shorts", *club_hashtags(transfer)]
+    description += " ".join(hashtags)
+    return description
 
 
 def process_transfer(transfer: dict) -> None:
-    player = (transfer.get("player") or {}).get("display_name") or (transfer.get("player") or {}).get("name") or "Unknown Player"
-    # The fromTeam/toTeam includes can come back null; fall back to
-    # fetching the team by its raw id from the transfer record.
-    from_team = transfer.get("fromTeam") or sportmonks_client.get_team(transfer.get("from_team_id"))
-    to_team = transfer.get("toTeam") or sportmonks_client.get_team(transfer.get("to_team_id"))
-    from_club = from_team.get("name") or "Unknown Club"
-    to_club = to_team.get("name") or "Unknown Club"
-    from_logo = from_team.get("image_path")
-    to_logo = to_team.get("image_path")
+    player = transfer["player_name"]
+    from_club, to_club = transfer["from_club"], transfer["to_club"]
     fee_text = format_fee(transfer)
 
-    out_path = os.path.join(config.OUTPUT_DIR, f"transfer_{transfer['id']}.mp4")
-    print(f"Building video for transfer {transfer['id']}: {player} {from_club} -> {to_club}")
-    video_gen.build_video(player, from_club, to_club, fee_text, from_logo, to_logo, out_path)
+    out_path = os.path.join(config.OUTPUT_DIR, f"transfer_{transfer['transfer_id']}.mp4")
+    print(f"Building video for transfer {transfer['transfer_id']} (score {transfer['score']:.3f}): "
+          f"{player} {from_club} -> {to_club}")
+    _, photo_credit = video_gen.build_video(
+        player, from_club, to_club, fee_text,
+        transfer["from_club_logo"], transfer["to_club_logo"], out_path,
+    )
+    if photo_credit:
+        print(f"Using player photo: {photo_credit['title']} ({photo_credit['license']}, {photo_credit['artist']})")
+    else:
+        print("No suitable free player photo found - using default background.")
 
     title = build_title(player, from_club, to_club)
-    description = build_description(player, from_club, to_club, fee_text)
+    description = build_description(transfer, player, from_club, to_club, fee_text, photo_credit)
+    tags = ["football", "soccer", "transfers", "scottish football", "shorts", from_club.lower(), to_club.lower()]
 
     if config.DRY_RUN:
         print(f"[DRY RUN] Would upload: {title}\n{description}\nFile: {out_path}")
     else:
-        video_id = youtube_upload.upload_short(
-            out_path, title, description,
-            tags=["football", "soccer", "transfers", "scottish football", "shorts"],
-        )
+        video_id = youtube_upload.upload_short(out_path, title, description, tags=tags)
         print(f"Uploaded: https://youtube.com/shorts/{video_id}")
-        os.remove(out_path)
+        # Cleanup failing here must not look like the upload itself failed -
+        # that would make the retry wrapper around this function re-run it
+        # and double-post, since the upload already succeeded.
+        try:
+            os.remove(out_path)
+        except OSError as exc:
+            print(f"Warning: couldn't remove {out_path}: {exc}", file=sys.stderr)
+
+
+def _run() -> int:
+    posted_ids = state.load_posted_ids()
+    print(f"{len(posted_ids)} transfers already posted.")
+
+    season_id = config.SEASON_ID_OVERRIDE or scraper.current_season_id()
+    try:
+        transfers = retry.retry(
+            lambda: scraper.get_scottish_premiership_transfers(season_id),
+            config.RETRY_ATTEMPTS, config.RETRY_BASE_DELAY, "Scraping Transfermarkt",
+        )
+    except Exception as exc:  # noqa: BLE001
+        notify.send(
+            "Scrape failed - no transfers checked this run",
+            f"Scraping Transfermarkt (season {season_id}) failed after "
+            f"{config.RETRY_ATTEMPTS} attempts:\n\n{exc}",
+        )
+        return 1
+    print(f"Scraped {len(transfers)} transfers for season {season_id}.")
+
+    unposted = [t for t in transfers if t["transfer_id"] not in posted_ids]
+    print(f"{len(unposted)} of those are new (not yet posted).")
+
+    ranked = ranking.rank(unposted)
+    to_post = ranked[: config.MAX_TRANSFERS_PER_RUN]
+
+    if not to_post:
+        print("No new transfers to post.")
+        return 0
+
+    newly_posted = set()
+    failures = []
+    for transfer in to_post:
+        try:
+            retry.retry(
+                lambda t=transfer: process_transfer(t),
+                config.RETRY_ATTEMPTS, config.RETRY_BASE_DELAY,
+                f"Processing transfer {transfer['transfer_id']} ({transfer['player_name']})",
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"Giving up on transfer {transfer.get('transfer_id')}: {exc}", file=sys.stderr)
+            failures.append((transfer, exc))
+            continue
+        newly_posted.add(transfer["transfer_id"])
+
+    if failures:
+        body = "\n".join(
+            f"- {t['player_name']} ({t['from_club']} -> {t['to_club']}, id {t['transfer_id']}): {exc}"
+            for t, exc in failures
+        )
+        notify.send(
+            f"{len(failures)} transfer(s) failed after {config.RETRY_ATTEMPTS} attempts",
+            f"These stay unposted and will be retried next run:\n\n{body}",
+        )
+
+    if config.DRY_RUN:
+        print(f"[DRY RUN] Not updating state (would add {len(newly_posted)} posted ids).")
+    else:
+        state.save_posted_ids(posted_ids | newly_posted)
+        print(f"Updated state with {len(newly_posted)} newly posted transfer ids.")
+    return 0
 
 
 def main() -> int:
-    last_seen = state.load_last_seen_id()
-    print(f"Last seen transfer id: {last_seen}")
-
-    end_date = datetime.date.today()
-    start_date = end_date - datetime.timedelta(days=TRANSFER_WINDOW_DAYS)
-    transfers = sportmonks_client.get_transfers_between(start_date.isoformat(), end_date.isoformat())
-    print(f"Fetched {len(transfers)} transfers from {start_date} to {end_date}.")
-
-    if config.SCOTTISH_TEAM_IDS:
-        scottish_team_ids = set(config.SCOTTISH_TEAM_IDS)
-        print(f"Using {len(scottish_team_ids)} hardcoded Scottish team ids.")
-    else:
-        scottish_team_ids = sportmonks_client.get_scottish_team_ids()
-        print(f"{len(scottish_team_ids)} teams currently in configured Scottish leagues {config.SCOTTISH_LEAGUE_IDS}.")
-
-    transfers = sportmonks_client.filter_scottish(transfers, scottish_team_ids)
-    print(f"{len(transfers)} of those transfers involve a Scottish team.")
-
-    if last_seen is not None:
-        transfers = [t for t in transfers if t["id"] > last_seen]
-
-    if not transfers:
-        print("No new transfers.")
-        return 0
-
-    # Process oldest -> newest so posting order matches transfer order.
-    transfers.sort(key=lambda t: t["id"])
-    transfers = transfers[: config.MAX_TRANSFERS_PER_RUN]
-
-    max_id = last_seen or 0
-    for transfer in transfers:
-        try:
-            process_transfer(transfer)
-        except Exception as exc:  # noqa: BLE001
-            print(f"Failed to process transfer {transfer.get('id')}: {exc}", file=sys.stderr)
-            continue
-        max_id = max(max_id, transfer["id"])
-
-    if config.DRY_RUN:
-        print(f"[DRY RUN] Not updating state (would set last_seen_id={max_id}).")
-    else:
-        state.save_last_seen_id(max_id)
-        print(f"Updated state to last_seen_id={max_id}")
-    return 0
+    try:
+        return _run()
+    except Exception as exc:  # noqa: BLE001
+        notify.send("Run crashed", f"Unhandled error:\n\n{exc}")
+        raise
 
 
 if __name__ == "__main__":

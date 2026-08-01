@@ -1,21 +1,25 @@
 """
-Tracks the highest transfer ID we've already posted, so an hourly run only
-picks up genuinely new transfers. The state file is committed back to the
-repo by the GitHub Actions workflow after each run.
+Tracks which transfer ids have already been posted, so a run only considers
+transfers it hasn't posted before. Unlike an incremental "last seen id"
+cursor, Transfermarkt's season page always lists every transfer for the
+season, so each run simply re-scrapes it all and filters out anything in
+this set. The state file is committed back to the repo by the GitHub
+Actions workflow after each run.
 """
 import json
 import os
+
 import config
 
 
-def load_last_seen_id() -> int | None:
+def load_posted_ids() -> set[int]:
     if not os.path.exists(config.STATE_FILE):
-        return None
+        return set()
     with open(config.STATE_FILE, "r") as f:
         data = json.load(f)
-    return data.get("last_seen_id")
+    return set(data.get("posted_transfer_ids", []))
 
 
-def save_last_seen_id(transfer_id: int) -> None:
+def save_posted_ids(posted_ids: set[int]) -> None:
     with open(config.STATE_FILE, "w") as f:
-        json.dump({"last_seen_id": transfer_id}, f, indent=2)
+        json.dump({"posted_transfer_ids": sorted(posted_ids)}, f, indent=2)

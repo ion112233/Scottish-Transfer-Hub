@@ -2,6 +2,11 @@
 Run this ONCE, locally on your own machine (not in GitHub Actions), to
 generate a YOUTUBE_REFRESH_TOKEN you can then store as a GitHub secret.
 
+If you already have a YOUTUBE_CLIENT_ID / YOUTUBE_CLIENT_SECRET /
+YOUTUBE_REFRESH_TOKEN from the old Scottish-Transfer-Hub project's setup
+for this same YouTube channel, you can reuse those directly instead of
+running this again - the OAuth grant is per-channel, not per-repo.
+
 Prerequisites:
   1. In Google Cloud Console, create a project and enable "YouTube Data API v3".
   2. Create OAuth 2.0 credentials of type "Desktop app".
