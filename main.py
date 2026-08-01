@@ -161,6 +161,12 @@ def _run() -> int:
     else:
         state.save_posted_ids(posted_ids | newly_posted)
         print(f"Updated state with {len(newly_posted)} newly posted transfer ids.")
+
+    if to_post and not newly_posted:
+        # Every attempted transfer failed - fail the Action run itself (not
+        # just the email alert) so GitHub's own failure notification is a
+        # second line of defense if email alerts aren't configured.
+        return 1
     return 0
 
 
