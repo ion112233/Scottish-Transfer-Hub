@@ -1,12 +1,14 @@
 # Transfer Web Scrapper
 
 Every 8 hours, this scrapes Transfermarkt for confirmed Scottish Premiership
-transfers, scores them for how "interesting" they are (fee + player market
-value + club prominence), and posts an auto-generated YouTube Short for the
-2 most interesting ones it hasn't posted yet - up to 6 Shorts/day across the
-3 daily runs, matched to YouTube's default API upload quota, fewer whenever
-there aren't 2 interesting unposted transfers in the pool. Runs entirely on
-GitHub Actions' free tier — no server needed.
+transfers confirmed since the last check, scores them for how "interesting"
+they are (fee + player market value + club prominence), and posts an
+auto-generated YouTube Short for the 2 most interesting ones - up to 6
+Shorts/day across the 3 daily runs, matched to YouTube's default API upload
+quota, fewer whenever there aren't 2 interesting new transfers in that
+window. Only ever reports on recent news - see "Freshness window" below for
+how that's enforced without resurfacing week-old transfers. Runs entirely
+on GitHub Actions' free tier — no server needed.
 
 This replaces the SportMonks-API-based bot that used to live in this same
 repo (posting hourly to the same YouTube channel) - its source has been
@@ -21,11 +23,12 @@ running both and double-posting.
    direction, involving a Premiership club — arrivals and departures alike.
    "End of loan" entries (a player just returning from a loan spell) are
    filtered out as not real transfer news.
-3. Anything already in `state.json` is dropped, then `ranking.py` scores
-   what's left: 45% transfer fee, 30% the player's Transfermarkt market
-   value, 25% club prominence (Celtic/Rangers weighted highest, other
-   Premiership clubs next, anyone else — a foreign or lower-league
-   counterpart club — a flat baseline).
+3. Anything already in `state.json` (seen in some previous run) is dropped
+   - see "Freshness window" - then `ranking.py` scores what's left: 45%
+   transfer fee, 30% the player's Transfermarkt market value, 25% club
+   prominence (Celtic/Rangers weighted highest, other Premiership clubs
+   next, anyone else — a foreign or lower-league counterpart club — a flat
+   baseline).
 4. The top 2 scores overall (not just the 2 most recent) get a video each:
    `video_gen.py` renders a 1080×1920 vertical clip (player name, club
    crests, fee, TTS voiceover) with Pillow + MoviePy + edge-tts. The
@@ -36,10 +39,28 @@ running both and double-posting.
    description that includes club-specific hashtags (e.g. `#Celtic`,
    `#Rangers`) for whichever clubs are in that transfer, on top of the
    static `#ScottishFootball #Transfers #Shorts`.
-6. `state.json` is updated so the same transfer is never posted twice.
+6. `state.json` is updated so the same transfer is never reconsidered.
 
 Any step that fails is retried a few times before being treated as a real
 failure - see "Reliability" below.
+
+## Freshness window
+
+Transfermarkt's transfer table doesn't expose an exact "date confirmed" for
+most transfers (only loan-*end* dates), and fetching each one's own detail
+page just to get a real date wouldn't fit the one-request-per-run scraping
+etiquette below - so recency is tracked differently: every run marks the
+*entire* current scrape's transfer ids as seen in `state.json`
+(`seen_transfer_ids`), and only ranks transfers that are new since the
+previous run. Since runs are 8 hours apart, "new since last run" is a
+practical stand-in for "confirmed in roughly the last 8 hours" - without
+needing exact dates or extra requests.
+
+This means a transfer only gets one window of eligibility: if it doesn't
+make the top 2 in the run where it first appears (or if posting it fails
+even after retries), it's marked seen anyway and won't be reconsidered
+later - the tradeoff is "only ever reports genuinely recent news" over
+"eventually posts everything," which is the point.
 
 ## Player photos
 
@@ -87,17 +108,22 @@ anyone watching the logs:
 - **Retries**: scraping and each transfer's build-and-upload are retried up
   to `RETRY_ATTEMPTS` times (default 3, exponential backoff from
   `RETRY_BASE_DELAY` seconds) via `retry.py` before being treated as a real
-  failure. A transfer that still fails after retries just stays unposted
-  and gets picked up again next run - nothing is lost.
+  failure. Because of the freshness window above, a transfer that still
+  fails after retries does *not* get another chance next run - it's already
+  marked seen. Three in-run attempts is the whole safety net for a given
+  transfer, by design (see "Freshness window").
 - **Email alerts** (`notify.py`): if the scrape fails entirely, a transfer
   fails after all retries, or the run hits an unhandled error, an email is
   sent via Gmail SMTP. This is optional - if `GMAIL_ADDRESS` /
   `GMAIL_APP_PASSWORD` aren't set, it just logs instead of sending. See
   "Email alerts" under setup for how to configure it.
-- **Self-healing by design**: because each run re-scrapes the *entire*
-  season and re-ranks the whole unposted pool (not just "what's new since
-  last time"), a missed or failed run never loses a transfer - it's simply
-  reconsidered, and re-ranked against everything else, next time.
+- **A failed scrape loses nothing**: `state.json` is only updated *after* a
+  successful scrape, right before ranking - so if scraping itself fails
+  (site down, network error), no transfer is marked seen, and everything
+  currently on Transfermarkt is still eligible next run. It's specifically
+  a transfer that's *successfully scraped* but then fails to post that
+  doesn't get a second chance - a deliberate tradeoff for staying strictly
+  recent (see "Freshness window").
 
 ## One-time setup
 

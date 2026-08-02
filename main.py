@@ -3,14 +3,18 @@ Entry point. Run every 8 hours by GitHub Actions:
 
   1. Scrape Transfermarkt's Scottish Premiership season transfer page
      (retried a few times on transient failure).
-  2. Drop anything already posted (tracked in state.json) and anything
-     that's just a loan expiring (not real transfer news).
+  2. Keep only transfers not already seen in a previous scrape (see
+     state.py - this is what keeps the pool to roughly "the last 8 hours"
+     instead of resurfacing week-old backlog) and drop anything that's
+     just a loan expiring (not real transfer news).
   3. Score what's left (fee + market value + club prominence) and take the
-     2 most interesting overall, not just the 2 most recent.
+     2 most interesting, not just the 2 most recently confirmed.
   4. For each (most interesting first, retried a few times on failure):
        - build a short vertical video
        - upload it to YouTube as a Short
-  5. Update state.json with every transfer id just posted.
+  5. Mark every transfer scraped this run as seen - whether it got posted,
+     failed, or simply lost out to a higher-scored one - so nothing gets a
+     second window of eligibility once its "last 8 hours" has passed.
 
 Any step that still fails after retries triggers an email alert (see
 notify.py) rather than failing silently - the goal is to catch problems
@@ -103,8 +107,8 @@ def process_transfer(transfer: dict) -> None:
 
 
 def _run() -> int:
-    posted_ids = state.load_posted_ids()
-    print(f"{len(posted_ids)} transfers already posted.")
+    seen_ids = state.load_seen_ids()
+    print(f"{len(seen_ids)} transfers already seen in a previous run.")
 
     season_id = config.SEASON_ID_OVERRIDE or scraper.current_season_id()
     try:
@@ -121,11 +125,18 @@ def _run() -> int:
         return 1
     print(f"Scraped {len(transfers)} transfers for season {season_id}.")
 
-    unposted = [t for t in transfers if t["transfer_id"] not in posted_ids]
-    print(f"{len(unposted)} of those are new (not yet posted).")
+    new_transfers = [t for t in transfers if t["transfer_id"] not in seen_ids]
+    print(f"{len(new_transfers)} of those are new since the last check (~last 8h).")
 
-    ranked = ranking.rank(unposted)
+    ranked = ranking.rank(new_transfers)
     to_post = ranked[: config.MAX_TRANSFERS_PER_RUN]
+
+    all_scraped_ids = {t["transfer_id"] for t in transfers}
+    if config.DRY_RUN:
+        print(f"[DRY RUN] Not updating state (would mark {len(all_scraped_ids - seen_ids)} ids as seen).")
+    else:
+        state.save_seen_ids(seen_ids | all_scraped_ids)
+        print(f"Marked {len(all_scraped_ids)} scraped transfers as seen.")
 
     if not to_post:
         print("No new transfers to post.")
@@ -153,14 +164,10 @@ def _run() -> int:
         )
         notify.send(
             f"{len(failures)} transfer(s) failed after {config.RETRY_ATTEMPTS} attempts",
-            f"These stay unposted and will be retried next run:\n\n{body}",
+            f"These are already marked seen and won't be retried next run - "
+            f"only genuinely new transfers get picked up going forward:\n\n{body}",
         )
-
-    if config.DRY_RUN:
-        print(f"[DRY RUN] Not updating state (would add {len(newly_posted)} posted ids).")
-    else:
-        state.save_posted_ids(posted_ids | newly_posted)
-        print(f"Updated state with {len(newly_posted)} newly posted transfer ids.")
+    print(f"Posted {len(newly_posted)}/{len(to_post)} transfers this run.")
 
     if to_post and not newly_posted:
         # Every attempted transfer failed - fail the Action run itself (not
