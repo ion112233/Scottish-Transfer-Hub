@@ -55,7 +55,7 @@ def club_hashtags(transfer: dict) -> list[str]:
 
 
 def build_description(transfer: dict, player: str, from_club: str, to_club: str, fee_text: str,
-                       photo_credit: dict | None) -> str:
+                       photo_credit: dict | None, music_credit: str) -> str:
     description = (
         f"{player} moves from {from_club} to {to_club}. {fee_text}.\n\n"
         f"Automated transfer update, sourced from Transfermarkt.\n"
@@ -65,7 +65,7 @@ def build_description(transfer: dict, player: str, from_club: str, to_club: str,
             f"Player photo: {photo_credit['artist']}, {photo_credit['license']}, "
             f"via Wikimedia Commons ({photo_credit['url']}).\n"
         )
-    description += f"{config.MUSIC_CREDIT}\n"
+    description += f"{music_credit}\n"
     hashtags = ["#ScottishFootball", "#Transfers", "#Shorts", *club_hashtags(transfer)]
     description += " ".join(hashtags)
     return description
@@ -79,9 +79,10 @@ def process_transfer(transfer: dict) -> None:
     out_path = os.path.join(config.OUTPUT_DIR, f"transfer_{transfer['transfer_id']}.mp4")
     print(f"Building video for transfer {transfer['transfer_id']} (score {transfer['score']:.3f}): "
           f"{player} {from_club} -> {to_club}")
-    _, photo_credit = video_gen.build_video(
+    _, photo_credit, music_credit = video_gen.build_video(
         player, from_club, to_club, fee_text,
         transfer["from_club_logo"], transfer["to_club_logo"], out_path,
+        transfer_id=transfer["transfer_id"],
     )
     if photo_credit:
         print(f"Using player photo: {photo_credit['title']} ({photo_credit['license']}, {photo_credit['artist']})")
@@ -89,7 +90,7 @@ def process_transfer(transfer: dict) -> None:
         print("No suitable free player photo found - using default background.")
 
     title = build_title(player, from_club, to_club)
-    description = build_description(transfer, player, from_club, to_club, fee_text, photo_credit)
+    description = build_description(transfer, player, from_club, to_club, fee_text, photo_credit, music_credit)
     tags = ["football", "soccer", "transfers", "scottish football", "shorts", from_club.lower(), to_club.lower()]
 
     if config.DRY_RUN:

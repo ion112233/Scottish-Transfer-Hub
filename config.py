@@ -63,16 +63,30 @@ FEE_CAP_EUR = 8_000_000       # fee at/above this scores 1.0 on the fee componen
 MARKET_VALUE_CAP_EUR = 10_000_000
 
 # --- Music ---
-# "New Hero in Town" by Kevin MacLeod (incompetech.com), Creative Commons:
-# By Attribution 4.0 (creativecommons.org/licenses/by/4.0/). The file lives
-# at assets/background_music.mp3 - see README "Background music" for the
-# license terms this credit line satisfies.
-MUSIC_PATH = os.path.join(os.path.dirname(__file__), "assets", "background_music.mp3")
+# Both by Kevin MacLeod (incompetech.com), Creative Commons: By Attribution
+# 4.0 (creativecommons.org/licenses/by/4.0/) - see README "Background music"
+# for what that license requires. A track is picked per-video (by transfer
+# id, so it's deterministic rather than random) rather than always using the
+# same one, since a single reused track becomes a recognizable "this is a
+# templated channel" tell across enough videos.
+_ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
+MUSIC_TRACKS = [
+    {
+        "path": os.path.join(_ASSETS_DIR, "background_music_1.mp3"),
+        "credit": '"New Hero in Town" by Kevin MacLeod (incompetech.com), '
+                  "licensed under CC BY 4.0 (creativecommons.org/licenses/by/4.0/).",
+    },
+    {
+        "path": os.path.join(_ASSETS_DIR, "background_music_2.mp3"),
+        "credit": '"Happy Alley" by Kevin MacLeod (incompetech.com), '
+                  "licensed under CC BY 4.0 (creativecommons.org/licenses/by/4.0/).",
+    },
+]
 MUSIC_VOLUME = 0.12  # kept low so it never competes with the voiceover
-MUSIC_CREDIT = (
-    '"New Hero in Town" by Kevin MacLeod (incompetech.com), '
-    "licensed under CC BY 4.0 (creativecommons.org/licenses/by/4.0/)."
-)
+
+# --- Branding ---
+WATERMARK_TEXT = "STH"  # small persistent corner badge, see video_gen._watermark_badge
+CHANNEL_HANDLE = "Scottish Transfer Hub"
 
 # --- Reliability ---
 RETRY_ATTEMPTS = int(os.environ.get("RETRY_ATTEMPTS", "3"))
